@@ -95,7 +95,7 @@ def chart(h):
                                line=dict(color=LINE.get(nm, '#fff'), width=1.3), hovertemplate='%{y:+.1f}%',
                                visible=True if nm in ('S&P500',) else 'legendonly'))
     lim = float(np.nanmax(np.abs(CHG[h][show]))) * 1.15
-    lim2 = float(np.nanpercentile(np.abs(ACHG[h][show].values), 99)) * 1.1   # 오른쪽 축도 0을 가운데에 맞춤
+    lim2 = float(np.nanpercentile(np.abs(ACHG[h][show][[c for c in APX.columns if c != '비트코인']].values), 99)) * 1.1   # 오른쪽 축도 0을 가운데에 맞춤
     f.update_layout(paper_bgcolor=BG, plot_bgcolor=BG, font=dict(family='Nanum Gothic, sans-serif', color=TXT, size=12),
                     hovermode='x unified', height=470, margin=dict(l=60, r=60, t=40, b=70),
                     xaxis=dict(gridcolor=GRID, showspikes=True, spikedash='dot', spikecolor='#888',
