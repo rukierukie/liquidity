@@ -70,7 +70,7 @@ idx = pd.bdate_range(DL_START, END)
 al = lambda s: s.reindex(idx.union(s.index)).ffill().reindex(idx)
 P = pd.DataFrame(index=idx)
 P['연준'] = al(RAW['WALCL']) / 1e6
-P['TGA'] = -al(RAW['WTREGEN']) / 1e3
+_tg = al(RAW['WTREGEN']); P['TGA'] = -_tg / (1e6 if _tg.median() > 1e4 else 1e3)   # FRED WTREGEN 단위(백만 달러) 자동 판별
 P['역레포'] = -al(RAW['RRPONTSYD']).fillna(0) / 1e3
 if 'ECBASSETSW' in RAW and 'DEXUSEU' in RAW: P['ECB'] = al(RAW['ECBASSETSW']) / 1e6 * al(RAW['DEXUSEU'])
 if 'JPNASSETS' in RAW and 'DEXJPUS' in RAW: P['BoJ'] = al(RAW['JPNASSETS']) * 1e8 / 1e12 / al(RAW['DEXJPUS'])
