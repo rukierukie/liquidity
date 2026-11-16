@@ -22,20 +22,20 @@ def fred(sid):
     errs = []
     if FRED_API_KEY:
         try:
-            j = requests.get('https://api.stlouisfed.org/fred/series/observations', timeout=60,
+            j = requests.get('https://api.stlouisfed.org/fred/series/observations', timeout=30,
                              params={'series_id': sid, 'api_key': FRED_API_KEY, 'file_type': 'json', 'observation_start': DL_START}).json()
             d = pd.DataFrame(j['observations'])
             return pd.Series(pd.to_numeric(d['value'], errors='coerce').values, index=pd.to_datetime(d['date'])).dropna()
         except Exception as e:
             errs.append(f'API {e}')
-    for k in range(4):
+    for k in range(2):
         try:
-            r = requests.get(f'https://fred.stlouisfed.org/graph/fredgraph.csv?id={sid}', timeout=60, headers=UA)
+            r = requests.get(f'https://fred.stlouisfed.org/graph/fredgraph.csv?id={sid}', timeout=(10, 25), headers=UA)
             d = pd.read_csv(io.StringIO(r.text)); d = d.iloc[:, :2]; d.columns = ['date', 'v']
             s = pd.Series(pd.to_numeric(d['v'], errors='coerce').values, index=pd.to_datetime(d['date'])).dropna()
             return s[s.index >= DL_START]
         except Exception as e:
-            errs.append(str(e)[:80]); time.sleep(5 * (k + 1))
+            errs.append(str(e)[:80]); print(f'  {sid} 재시도 {k+1}: {str(e)[:80]}', flush=True); time.sleep(3)
     raise RuntimeError(f'{sid}: {errs[-1]}')
 
 def yclose(tk):
@@ -51,17 +51,17 @@ def yclose(tk):
             if len(c.dropna()) > 100: return c.dropna().astype(float)
         except Exception:
             pass
-        time.sleep(5 * (k + 1))
+        time.sleep(3)
     raise RuntimeError(f'{tk} 수신 실패')
 
 RAW, NOTE = {}, []
 for sid in ('WALCL', 'WTREGEN', 'RRPONTSYD', 'ECBASSETSW', 'DEXUSEU', 'JPNASSETS', 'DEXJPUS'):
-    try: RAW[sid] = fred(sid)
-    except Exception as e: NOTE.append(f'{sid} 실패({str(e)[:60]})')
+    try: RAW[sid] = fred(sid); print(f'{sid} {len(RAW[sid])}개, 마지막 {RAW[sid].index[-1].date()}', flush=True)
+    except Exception as e: NOTE.append(f'{sid} 실패({str(e)[:60]})'); print(NOTE[-1], flush=True)
 PX = {}
 for nm, tk in ASSETS.items():
-    try: PX[nm] = yclose(tk)
-    except Exception as e: NOTE.append(f'{nm} 실패')
+    try: PX[nm] = yclose(tk); print(f'{nm} {len(PX[nm])}개', flush=True)
+    except Exception as e: NOTE.append(f'{nm} 실패'); print(NOTE[-1], flush=True)
 if any(s not in RAW for s in ('WALCL', 'WTREGEN', 'RRPONTSYD')):
     raise SystemExit('필수 자료 실패: ' + '; '.join(NOTE))
 
