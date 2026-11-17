@@ -2,6 +2,8 @@ name: 유동성 대시보드 갱신
 on:
   schedule:
     - cron: '17 22 * * *'   # 매일 07:17 KST
+    - cron: '43 23 * * *'   # 예비 08:43 KST (예약 실행 누락 대비)
+    - cron: '13 2 * * *'    # 예비 11:13 KST
   workflow_dispatch:         # Actions 탭에서 'Run workflow'로 바로 실행
 permissions:
   contents: read
@@ -34,4 +36,3 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
