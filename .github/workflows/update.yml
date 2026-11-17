@@ -1,9 +1,11 @@
 name: 유동성 대시보드 갱신
 on:
-  schedule:
-    - cron: '17 22 * * *'   # 매일 07:17 KST
-    - cron: '43 23 * * *'   # 예비 08:43 KST (예약 실행 누락 대비)
-    - cron: '13 2 * * *'    # 예비 11:13 KST
+  schedule:                  # 하루 5회(KST). 예약 실행이 누락돼도 다음 회차가 갱신
+    - cron: '17 22 * * *'    # 07:17
+    - cron: '43 23 * * *'    # 08:43
+    - cron: '13 2 * * *'     # 11:13
+    - cron: '37 8 * * *'     # 17:37
+    - cron: '7 13 * * *'     # 22:07
   workflow_dispatch:         # Actions 탭에서 'Run workflow'로 바로 실행
 permissions:
   contents: read
@@ -11,7 +13,7 @@ permissions:
   id-token: write
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -20,9 +22,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: pip install -r requirements.txt
-      - run: python -u build.py
-        timeout-minutes: 15
+      - run: pip install -r requirements.txt || (sleep 60 && pip install -r requirements.txt)
+      - name: build (실패 시 3분 뒤 한 번 더)
+        run: python -u build.py || (sleep 180 && python -u build.py)
+        timeout-minutes: 20
         env:
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       - uses: actions/upload-pages-artifact@v3
@@ -37,3 +40,11 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+  keepalive:                 # 60일 무활동 시 예약 실행 자동 중지 방지
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/update.yml/enable"
+        env:
+          GH_TOKEN: ${{ github.token }}
