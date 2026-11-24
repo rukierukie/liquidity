@@ -304,7 +304,7 @@ function fitY(gd){
   (gd._fullData||[]).forEach(t=>{if(t.visible!==true||!t.x||!t.y)return;const ax=t.yaxis==='y2'?'y2':'y';
     if(!t._nx)t._nx=Array.from(t.x,dnum);const nx=t._nx,ys=t.y;
     for(let i=0;i<nx.length;i++){if(nx[i]<x0||nx[i]>x1)continue;const a=Math.abs(ys[i]);if(isFinite(a)&&a>m[ax])m[ax]=a}});
-  const nice=v=>{const p=Math.pow(10,Math.floor(Math.log10(v))),f=v/p;return (f<=1?1:f<=2?2:f<=2.5?2.5:f<=5?5:10)*p};
+  const nice=v=>{const p=Math.pow(10,Math.floor(Math.log10(v))),f=v/p;return [1,1.2,1.5,2,2.5,3,4,5,6,8,10].find(k=>f<=k)*p};
   const u={};if(m.y>0){const r=nice(m.y*1.08);u['yaxis.range']=[-r,r]}if(L.yaxis2&&m.y2>0){const r=nice(m.y2*1.08);u['yaxis2.range']=[-r,r]}
   if(!Object.keys(u).length)return;gd._fitting=true;Plotly.relayout(gd,u).then(()=>{gd._fitting=false},()=>{gd._fitting=false})
 }
