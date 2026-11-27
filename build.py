@@ -1,5 +1,6 @@
 """TRIGER 글로벌 유동성 대시보드 생성기.
 매일 GitHub Actions가 실행 → FRED·야후 자료 수신 → site/index.html, site/contact.html 생성 → GitHub Pages 게시.
+v4 (2026-11-27): 원자료 엑셀(site/liquidity_raw.xlsx) 생성, 중앙은행 자료가 새로 들어온 갱신에서만 Gmail로 엑셀 첨부 발송(시크릿 GMAIL_USER, GMAIL_APP_PASSWORD).
 v3 (2026-11-24): 한국어/영어 전환(#en 또는 ?lang=en), 기간을 바꾸면 세로 눈금을 그 구간에 맞추고 왼쪽·오른쪽 0선을 항상 같은 높이로, 세로 확대 잠금, 문의 페이지.
 글로벌 유동성 = 연준 자산 - TGA - 역레포 + ECB 자산 + BoJ 자산 (중국 제외, 조 달러)."""
 import io, os, time, json, html as _html, datetime as dt
@@ -11,6 +12,8 @@ DL_START = '2003-01-01'   # 사이클 분석용으로 길게(차트 표시는 ST
 HORIZONS = {'3개월': 63, '6개월': 126, '12개월': 252}
 ASSETS = {'S&P500': '^GSPC', '금': 'GC=F', '비트코인': 'BTC-USD', '코스피': '^KS11'}
 FRED_API_KEY = os.environ.get('FRED_API_KEY', '')
+PAGES_URL = os.environ.get('PAGES_URL', 'https://rukierukie.github.io/liquidity/')   # 직전 발송 상태(state.json)를 읽어 올 게시 주소
+MAIL_KEYS = ('WALCL', 'WTREGEN', 'ECBASSETSW', 'JPNASSETS')   # 이 네 자료의 마지막 날짜가 바뀌면 '유동성 수치가 바뀐 갱신'으로 보고 메일을 보낸다(역레포·환율은 매일 바뀌어 제외)
 CONTACT = ('cymbalion', 'gmail.com')   # 문의 페이지 메일 주소(자동 수집을 줄이려고 페이지에서 조립해 보여 준다)
 DEMO = os.environ.get('DEMO') == '1'
 UA = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36'}
@@ -359,7 +362,7 @@ html = f'''<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name
 <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 <style>{CSS}</style></head><body data-title-en="TRIGER Global Liquidity"><div class="wrap">
 <div class="top"><h1>{T('TRIGER 글로벌 유동성 사이클', 'TRIGER Global Liquidity Cycle')}</h1>
-<div class="nav"><a class="lnk" id="contact" href="contact.html" data-keep-lang>{T('문의', 'Contact')}</a><button class="lang" id="lang" type="button" onclick="toggleLang()">EN</button></div></div>
+<div class="nav"><a class="lnk" href="liquidity_raw.xlsx" download>{T('원자료 엑셀', 'Raw data (Excel)')}</a><a class="lnk" id="contact" href="contact.html" data-keep-lang>{T('문의', 'Contact')}</a><button class="lang" id="lang" type="button" onclick="toggleLang()">EN</button></div></div>
 <div class="sub">{T(f'연준 - TGA - 역레포 + ECB + BoJ (중국 제외) · 매일 자동 갱신 · 마지막 갱신 {now_kst:%Y-%m-%d %H:%M} KST · 구성 {comp}', f'Fed - TGA - RRP + ECB + BoJ (ex-China) · updated daily · last update {now_kst:%Y-%m-%d %H:%M} KST · components {comp_en}')}</div>
 <div class="cards">{''.join(f'<div class="card"><div class="k">{k}</div><div class="v">{v}</div><div class="n">{n}</div></div>' for k, v, n in cards)}</div>
 <div class="tabs">{''.join(f'<div class="tab{" on" if i == 1 else ""}" onclick="sel({i})">{lab}</div>' for i, (lab, _) in enumerate(PANELS))}</div>
@@ -380,3 +383,92 @@ os.makedirs('site', exist_ok=True)
 open('site/index.html', 'w', encoding='utf-8').write(html)
 open('site/contact.html', 'w', encoding='utf-8').write(contact_page())
 print('site/index.html 생성', last.date(), '실패:', NOTE)
+
+# ---- 원자료 엑셀과 메일 (v4) ----
+SID_KO = {'WALCL': '연준 총자산(백만 달러, 주간 수요일)', 'WTREGEN': '재무부 일반계정 TGA(십억 달러, 주간)', 'RRPONTSYD': '역레포 잔액(십억 달러, 일간)',
+          'ECBASSETSW': 'ECB 총자산(백만 유로, 주간 금요일)', 'DEXUSEU': '달러/유로 환율(일간)', 'JPNASSETS': 'BoJ 총자산(억 엔, 월간)', 'DEXJPUS': '엔/달러 환율(일간)'}
+def write_raw_xlsx(path):
+    liq = P.copy(); liq.columns = [f'{c}(조 달러)' for c in liq.columns]; liq['글로벌 유동성(조 달러)'] = GL
+    for h in HORIZONS: liq[f'{h} 로그 변화율(%)'] = CHG[h]
+    liq = liq[liq.index >= pd.Timestamp(START)]; liq.index.name = '날짜'
+    ast = pd.DataFrame(index=APX.index)
+    for nm in APX.columns:
+        ast[f'{nm} 종가'] = APX[nm]
+        for h in HORIZONS: ast[f'{nm} {h} 로그 변화율(%)'] = ACHG[h][nm]
+    ast = ast[ast.index >= pd.Timestamp(START)]; ast.index.name = '날짜'
+    cyc = pd.DataFrame({'사이클(2~6년 대역, 추세 대비 %)': CYC, '추세 제거 로그 유동성(%)': DTR}); cyc.index.name = '주(금요일)'
+    raw = pd.concat([pd.DataFrame({'자료': sid, '설명': SID_KO.get(sid, ''), '날짜': s_.index, '값': s_.values}) for sid, s_ in RAW.items()], ignore_index=True)
+    summ = pd.DataFrame([('기준일', f'{last:%Y-%m-%d}'), ('글로벌 유동성(조 달러)', f'{GL.iloc[-1]:.3f}')]
+                        + [(f'{h} 로그 변화율(%)', f'{CHG[h].iloc[-1]:+.2f}') for h in HORIZONS]
+                        + [('사이클 위상', PHASE), ('사이클(추세 대비 %)', f'{CYC.iloc[-1]:+.2f}'), ('주된 주기(년, 추정)', f'{PERIOD:.1f}')]
+                        + [(f'구성: {c}(조 달러)', f'{P[c].iloc[-1]:+.3f}') for c in P.columns]
+                        + [(f'마지막 자료일: {sid}', f'{RAW[sid].index[-1]:%Y-%m-%d}') for sid in RAW]
+                        + [('생성 시각(KST)', f'{now_kst:%Y-%m-%d %H:%M}'), ('대시보드', PAGES_URL)], columns=['항목', '값'])
+    note = pd.DataFrame({'설명': [
+        '글로벌 유동성 = 연준 총자산 - TGA - 역레포 + ECB 총자산(달러 환산) + BoJ 총자산(달러 환산), 중국 제외, 단위 조 달러.',
+        '각 자료는 영업일 기준으로 맞춘 뒤 직전 값으로 채웠다. 변화율은 로그 변화율(%)이며 3·6·12개월은 63·126·252영업일이다.',
+        '사이클은 주간 로그 유동성에서 선형 추세를 빼고 2~6년 대역 필터를 앞뒤 양방향으로 적용한 값이라 최근 값은 새 자료가 들어오면 바뀔 수 있다.',
+        '출처: FRED(세인트루이스 연준), 야후 파이낸스. 개인 연구용 비상업 자료이며 투자 권유가 아니다.']})
+    with pd.ExcelWriter(path, engine='openpyxl') as w:
+        summ.to_excel(w, sheet_name='요약', index=False); liq.to_excel(w, sheet_name='유동성_일별'); ast.to_excel(w, sheet_name='자산_일별')
+        cyc.to_excel(w, sheet_name='사이클_주간'); raw.to_excel(w, sheet_name='FRED_원자료', index=False); note.to_excel(w, sheet_name='설명', index=False)
+        for ws in w.book.worksheets:
+            ws.freeze_panes = 'B2'
+            for col in ws.columns:
+                ws.column_dimensions[col[0].column_letter].width = min(max(len(str(col[0].value or '')) * 1.6, 12), 46)
+
+def send_mail(subject, text, html_, attach):
+    user, pw = os.environ.get('GMAIL_USER', '').strip(), os.environ.get('GMAIL_APP_PASSWORD', '').replace(' ', '').strip()
+    if not (user and pw):
+        print('메일 생략: 저장소 시크릿 GMAIL_USER, GMAIL_APP_PASSWORD가 없음', flush=True); return False
+    import smtplib, ssl
+    from email.message import EmailMessage
+    m = EmailMessage(); m['Subject'] = subject; m['From'] = user; m['To'] = user
+    m.set_content(text); m.add_alternative(html_, subtype='html')
+    with open(attach, 'rb') as f:
+        m.add_attachment(f.read(), maintype='application', subtype='vnd.openxmlformats-officedocument.spreadsheetml.sheet', filename=os.path.basename(attach))
+    with smtplib.SMTP_SSL('smtp.gmail.com', 465, context=ssl.create_default_context(), timeout=60) as sv:
+        sv.login(user, pw); sv.send_message(m)
+    print('메일 발송 완료:', subject, flush=True); return True
+
+_xlsx = 'site/liquidity_raw.xlsx'
+try:
+    write_raw_xlsx(_xlsx); print('원자료 엑셀 생성', _xlsx, flush=True)
+except Exception as e:
+    _xlsx = None; print('원자료 엑셀 실패:', str(e)[:200], flush=True)
+FP = {sid: f'{RAW[sid].index[-1]:%Y-%m-%d}' for sid in MAIL_KEYS if sid in RAW}
+prev, prev_ok = {}, True
+if not DEMO:
+    try:
+        r_ = requests.get(PAGES_URL.rstrip('/') + '/state.json', timeout=20, headers=UA)
+        if r_.status_code == 200: prev = r_.json()
+        elif r_.status_code != 404: prev_ok = False
+    except Exception as e:
+        prev_ok = False; print('직전 상태 읽기 실패(이번에는 메일 보내지 않음):', str(e)[:100], flush=True)
+mailed = prev.get('mailed_fp')
+changed = [sid for sid in FP if (mailed or {}).get(sid) != FP[sid]]
+sent = False
+if DEMO or not prev_ok or not _xlsx:
+    pass
+elif mailed is None or changed:
+    _lab = {'WALCL': '연준', 'WTREGEN': 'TGA', 'ECBASSETSW': 'ECB', 'JPNASSETS': 'BoJ'}
+    _what = ', '.join(f"{_lab[s_]} {FP[s_]}" for s_ in (changed or FP))
+    subj = f"[유동성 원자료] {now_kst:%Y-%m-%d} 갱신 ({_what})"
+    _rows = [('글로벌 유동성', f'{GL.iloc[-1]:.2f}조 달러 ({last:%Y-%m-%d} 기준)')] + [(f'{h} 변화율', f'{CHG[h].iloc[-1]:+.1f}%') for h in HORIZONS] + [('사이클 위상', f'{PHASE}, 추세 대비 {CYC.iloc[-1]:+.1f}%'), ('새로 들어온 자료', _what)]
+    text = '\n'.join(f'{k}: {v}' for k, v in _rows) + f"\n\n대시보드: {PAGES_URL}\n첨부: 원자료 엑셀(요약, 유동성_일별, 자산_일별, 사이클_주간, FRED_원자료, 설명)\n\n개인 연구용 비상업 자료이며 투자 권유가 아닙니다."
+    _th = 'style="background-color:#3a3a3a;color:#ffffff;font-weight:bold;border:1px solid #9a9a9a;padding:6px 8px;text-align:left" bgcolor="#3a3a3a"'
+    _td = 'style="border:1px solid #9a9a9a;padding:6px 8px;color:#222222"'
+    html_ = (f'<div style="font-family:\'Nanum Gothic\',\'NanumGothic\',sans-serif;font-size:13px;color:#222222">'
+             f'<table border="1" cellpadding="6" cellspacing="0" width="100%" style="border-collapse:collapse;border:1px solid #9a9a9a;width:100%;font-family:\'Nanum Gothic\',\'NanumGothic\',sans-serif;font-size:13px">'
+             f'<tr><th {_th}>항목</th><th {_th}>값</th></tr>' + ''.join(f'<tr><td {_td}>{k}</td><td {_td}>{v}</td></tr>' for k, v in _rows) + '</table>'
+             f'<p>대시보드: <a href="{PAGES_URL}">{PAGES_URL}</a><br>첨부한 엑셀에 요약, 유동성 일별, 자산 일별, 사이클 주간, FRED 원자료, 설명 시트가 있습니다.</p>'
+             '<p style="color:#666666;font-size:11px">개인 연구용 비상업 자료이며 투자 권유가 아닙니다.</p></div>')
+    try:
+        sent = send_mail(subj, text, html_, _xlsx)
+    except Exception as e:
+        print('메일 발송 실패(다음 갱신에서 다시 시도):', str(e)[:200], flush=True)
+else:
+    print('메일 생략: 중앙은행 자료가 지난 발송 이후 바뀌지 않음', FP, flush=True)
+state = {'fp': FP, 'mailed_fp': (FP if sent else mailed), 'updated_kst': f'{now_kst:%Y-%m-%d %H:%M}'}
+open('site/state.json', 'w', encoding='utf-8').write(json.dumps(state, ensure_ascii=False))
+
