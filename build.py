@@ -1,5 +1,6 @@
 """TRIGER 글로벌 유동성 대시보드 생성기.
 매일 GitHub Actions가 실행 → FRED·야후 자료 수신 → site/index.html, site/contact.html 생성 → GitHub Pages 게시.
+v5 (2026-11-28): 주간 변화 탭(구성별 기여 막대, 최근 12주 표)과 1주 변화 카드. 기본 탭은 6개월 그대로.
 v4 (2026-11-27): 원자료 엑셀(site/liquidity_raw.xlsx) 생성, 중앙은행 자료가 새로 들어온 갱신에서만 Gmail로 엑셀 첨부 발송(시크릿 GMAIL_USER, GMAIL_APP_PASSWORD).
 v3 (2026-11-24): 한국어/영어 전환(#en 또는 ?lang=en), 기간을 바꾸면 세로 눈금을 그 구간에 맞추고 왼쪽·오른쪽 0선을 항상 같은 높이로, 세로 확대 잠금, 문의 페이지.
 글로벌 유동성 = 연준 자산 - TGA - 역레포 + ECB 자산 + BoJ 자산 (중국 제외, 조 달러)."""
@@ -91,7 +92,7 @@ LINE = {'S&P500': '#4fc3f7', '금': '#ffd54f', '비트코인': '#ff9f43', '코�
 
 NM_EN = {'S&P500': 'S&P 500', '금': 'Gold', '비트코인': 'Bitcoin', '코스피': 'KOSPI'}
 H_EN = {'3개월': '3M', '6개월': '6M', '12개월': '12M'}
-_REPL = [('유동성 사이클(2~6년 대역, 추세 대비 %)', 'Liquidity cycle (2-6y band, % vs trend)'), ('유동성 사이클(%)', 'Liquidity cycle (%)'),
+_REPL = [('주간 변화(10억 달러)', 'Weekly change ($bn)'), ('주간 합계', 'Weekly total'), ('역레포', 'RRP'), ('연준', 'Fed'), ('1년', '1Y'), ('유동성 사이클(2~6년 대역, 추세 대비 %)', 'Liquidity cycle (2-6y band, % vs trend)'), ('유동성 사이클(%)', 'Liquidity cycle (%)'),
          ('자산 사이클(%)', 'Asset cycle (%)'), ('표준화 점수(z)', 'Z-score'), ('유동성 변화율', 'Liquidity change'), ('자산 변화율', 'Asset change'),
          (' 변화율(%)', ' change (%)'), ('유동성', 'Liquidity'), ('사이클', 'cycle'), ('S&P500', 'S&P 500'), ('비트코인', 'Bitcoin'), ('코스피', 'KOSPI'),
          ('금', 'Gold'), ('12개월', '12M'), ('6개월', '6M'), ('3개월', '3M'), ('2년', '2Y'), ('5년', '5Y'), ('전체', 'All'), ('고점', 'Peak'), ('저점', 'Trough')]
@@ -120,6 +121,46 @@ def T(ko, en_):
     return f'<span class="i18n" data-en="{_html.escape(str(en_), quote=True)}">{ko}</span>'
 
 def hex2rgba(h, a): h = h.lstrip('#'); return f'rgba({int(h[0:2],16)},{int(h[2:4],16)},{int(h[4:6],16)},{a})'
+
+# ---- 주간 변화 (v5): 금요일마다 마지막 값. 마지막 주는 실제 마지막 자료일로 표시
+_wk_key = GL.index.to_period('W-FRI')
+WK = P.groupby(_wk_key).tail(1); WK = WK[WK.index >= pd.Timestamp(START)]
+WGL = WK.sum(axis=1)
+WCH = WK.diff() * 1000          # 구성별 유동성 기여(10억 달러). TGA·역레포는 이미 음수로 들어 있어 차분이 곧 기여
+WTOT = WGL.diff() * 1000
+WPCT = WGL.pct_change() * 100
+COMP_COL = {'연준': '#4a8fd1', 'TGA': '#9ad97a', '역레포': '#b0b4bb', 'ECB': '#e0a84f', 'BoJ': '#c77dd1'}
+def wchart():
+    f = go.Figure(); xs = WCH.index[1:]
+    for c in WCH.columns:
+        f.add_trace(go.Bar(x=xs, y=WCH[c].iloc[1:], name=c, marker_color=COMP_COL.get(c, '#888'), hovertemplate='%{y:+.1f}'))
+    f.add_trace(go.Scatter(x=xs, y=WTOT.iloc[1:], name='주간 합계', mode='lines+markers', line=dict(color='#ffffff', width=1.6), marker=dict(size=5), hovertemplate='%{y:+.1f}'))
+    _pos = WCH.iloc[1:].clip(lower=0).sum(axis=1); _neg = WCH.iloc[1:].clip(upper=0).sum(axis=1)   # 쌓인 막대 끝(세로 눈금 맞춤용, 보이지 않음)
+    for _s in (_pos, _neg):
+        f.add_trace(go.Scatter(x=xs, y=_s, mode='lines', line=dict(width=0), hoverinfo='skip', showlegend=False))
+    _x0 = xs[max(0, len(xs) - 26)]
+    f.update_layout(paper_bgcolor=BG, plot_bgcolor=BG, font=dict(family='Nanum Gothic, sans-serif', color=TXT, size=12), hovermode='x unified', barmode='relative',
+                    height=490, margin=dict(l=60, r=40, t=40, b=110),
+                    xaxis=dict(gridcolor=GRID, range=[_x0 - pd.Timedelta(days=4), xs[-1] + pd.Timedelta(days=4)],
+                               rangeselector=dict(buttons=[dict(count=6, label='6개월', step='month', stepmode='backward'), dict(count=1, label='1년', step='year', stepmode='backward'),
+                                                           dict(count=2, label='2년', step='year', stepmode='backward'), dict(step='all', label='전체')], bgcolor='#2a2d33', activecolor='#4a4f59', font=dict(color=TXT))),
+                    yaxis=dict(gridcolor=GRID, zerolinecolor='#999', title='주간 변화(10억 달러)', fixedrange=True),
+                    legend=dict(orientation='h', y=-0.24, x=0.5, xanchor='center', bgcolor='rgba(0,0,0,0)'))
+    _collect(f)
+    return f.to_html(full_html=False, include_plotlyjs=False, config={'displaylogo': False, 'responsive': True})
+def wtable(n=12):
+    hd = ''.join(f'<th>{T(k, e)}</th>' for k, e in (('주(마지막 자료일)', 'Week (last data date)'), ('글로벌 유동성', 'Global liquidity'), ('주간 변화', 'Weekly change'), ('주간 %', 'Weekly %'),
+                                                  ('연준', 'Fed'), ('TGA', 'TGA'), ('역레포', 'RRP'), ('ECB', 'ECB'), ('BoJ', 'BoJ')))
+    rows = ''
+    for d_ in list(WCH.index[1:])[-n:][::-1]:
+        _b = lambda v: T(f'{v * 10:+,.0f}억', f'{v:+,.1f}bn')
+        rows += (f'<tr><td>{d_:%Y-%m-%d}</td><td>{T(f"{WGL[d_]:.3f}조 달러", f"${WGL[d_]:.3f}tn")}</td><td>{_b(WTOT[d_])}</td><td>{WPCT[d_]:+.2f}%</td>'
+                 + ''.join(f'<td>{_b(WCH.at[d_, c])}</td>' for c in WCH.columns) + '</tr>')
+    return f'<table><tr>{hd}</tr>{rows}</table>'
+def wpanel():
+    return (wchart() + f'<h2>{T("최근 12주", "Last 12 weeks")}</h2>' + wtable()
+            + '<div class="note">' + T('막대는 한 주 동안 글로벌 유동성이 늘거나 줄어든 몫을 구성별로 나눈 것이다(10억 달러). 흰 선은 그 주의 합계다. TGA(재무부 계좌)와 역레포는 잔고가 줄면 시중 유동성이 늘어나므로 플러스로 나온다. ECB·BoJ는 달러 환산값이라 유로·엔 환율 변화가 섞인다. 연준은 수요일 기준 목요일(미국) 발표, ECB는 금요일 기준 다음 주 화요일 발표, BoJ는 월 1회라 최근 주는 일부 자료만 반영되어 있을 수 있다.',
+                                       'Bars split each week\'s change in global liquidity by component ($bn); the white line is the weekly total. A falling TGA or RRP balance adds liquidity, so it shows as positive. ECB and BoJ are converted to dollars, so euro and yen moves are included. The Fed reports Wednesday levels on Thursday (US), the ECB reports Friday levels the following Tuesday, and the BoJ monthly, so the latest week may reflect only part of the data.') + '</div>')
 
 def chart(h):
     f = go.Figure()
@@ -233,6 +274,7 @@ mom = '개선' if CHG['3개월'].iloc[-1] * 2 > CHG['6개월'].iloc[-1] else '�
 _usd = lambda v: f"{'+' if v >= 0 else '-'}${abs(v):.2f}tn"
 PHASE_EN = {'상승(확장 국면)': 'Rising (expansion)', '고점 통과 후 하락': 'Falling after peak', '하락(수축 국면)': 'Falling (contraction)', '저점 통과 후 회복': 'Recovering after trough'}[PHASE]
 cards = [(T('글로벌 유동성', 'Global liquidity'), T(f'{GL.iloc[-1]:.2f}조 달러', f'${GL.iloc[-1]:.2f}tn'), T(f'{last:%Y-%m-%d} 기준', f'as of {last:%Y-%m-%d}')),
+         (T('1주 변화', '1W change'), T(f'{WTOT.iloc[-1] * 10:+,.0f}억 달러', f'{WTOT.iloc[-1]:+,.1f}bn'), T(f'{WPCT.iloc[-1]:+.2f}%, 직전 주 {WTOT.iloc[-2] * 10:+,.0f}억', f'{WPCT.iloc[-1]:+.2f}%, prior week {WTOT.iloc[-2]:+,.1f}bn')),
          (T('3개월 변화율', '3M change'), f'{CHG["3개월"].iloc[-1]:+.1f}%', T(f'{(GL.iloc[-1] - GL.iloc[-64]):+.2f}조 달러', _usd(GL.iloc[-1] - GL.iloc[-64]))),
          (T('6개월 변화율', '6M change'), f'{CHG["6개월"].iloc[-1]:+.1f}%', T(f'{(GL.iloc[-1] - GL.iloc[-127]):+.2f}조 달러', _usd(GL.iloc[-1] - GL.iloc[-127]))),
          (T('12개월 변화율', '12M change'), f'{CHG["12개월"].iloc[-1]:+.1f}%', T(f'국면: {reg}, 최근 속도 {mom}', f"Regime: {'expansion' if reg == '확장' else 'contraction'}, momentum {'improving' if mom == '개선' else 'weakening'}")),
@@ -241,7 +283,8 @@ _CEN = {'연준': 'Fed', '역레포': 'RRP'}
 comp = ' · '.join(f'{c} {P[c].iloc[-1]:+.2f}' for c in P.columns)
 comp_en = ' · '.join(f'{_CEN.get(c, c)} {P[c].iloc[-1]:+.2f}' for c in P.columns)
 assets_now = ''.join(f'<tr><td>{T(nm, NM_EN.get(nm, nm))}</td>' + ''.join(f'<td>{ACHG[h][nm].iloc[-1]:+.1f}%</td>' for h in HORIZONS) + '</tr>' for nm in APX.columns)
-PANELS = [(T(h, H_EN[h]), chart(h)) for h in HORIZONS] + [(T('표준화 겹쳐보기', 'Z-score overlay'), zchart()), (T('사이클', 'Cycle'), cyc_chart())]
+DEFAULT_TAB = 2   # 0 주간 변화, 1 3개월, 2 6개월
+PANELS = [(T('주간 변화', 'Weekly change'), wpanel())] + [(T(h, H_EN[h]), chart(h)) for h in HORIZONS] + [(T('표준화 겹쳐보기', 'Z-score overlay'), zchart()), (T('사이클', 'Cycle'), cyc_chart())]
 now_kst = dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=9)
 CSS = f"""
 body{{margin:0;background:{BG};color:{TXT};font-family:'Nanum Gothic',sans-serif}}
@@ -365,8 +408,8 @@ html = f'''<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name
 <div class="nav"><a class="lnk" href="liquidity_raw.xlsx" download>{T('원자료 엑셀', 'Raw data (Excel)')}</a><a class="lnk" id="contact" href="contact.html" data-keep-lang>{T('문의', 'Contact')}</a><button class="lang" id="lang" type="button" onclick="toggleLang()">EN</button></div></div>
 <div class="sub">{T(f'연준 - TGA - 역레포 + ECB + BoJ (중국 제외) · 매일 자동 갱신 · 마지막 갱신 {now_kst:%Y-%m-%d %H:%M} KST · 구성 {comp}', f'Fed - TGA - RRP + ECB + BoJ (ex-China) · updated daily · last update {now_kst:%Y-%m-%d %H:%M} KST · components {comp_en}')}</div>
 <div class="cards">{''.join(f'<div class="card"><div class="k">{k}</div><div class="v">{v}</div><div class="n">{n}</div></div>' for k, v, n in cards)}</div>
-<div class="tabs">{''.join(f'<div class="tab{" on" if i == 1 else ""}" onclick="sel({i})">{lab}</div>' for i, (lab, _) in enumerate(PANELS))}</div>
-{''.join(f'<div class="panel{" on" if i == 1 else ""}" id="p{i}">{body}</div>' for i, (lab, body) in enumerate(PANELS))}
+<div class="tabs">{''.join(f'<div class="tab{" on" if i == DEFAULT_TAB else ""}" onclick="sel({i})">{lab}</div>' for i, (lab, _) in enumerate(PANELS))}</div>
+{''.join(f'<div class="panel{" on" if i == DEFAULT_TAB else ""}" id="p{i}">{body}</div>' for i, (lab, body) in enumerate(PANELS))}
 <div class="note">{T(f"3·6·12개월 탭: 면적은 글로벌 유동성의 로그 변화율(왼쪽 축, %), 선은 자산의 같은 기간 로그 변화율(오른쪽 축, %). 기간 버튼(2년·5년·전체)이나 확대로 구간을 바꾸면 세로 눈금이 그 구간에 맞춰 바뀌고, 왼쪽·오른쪽 0선은 항상 같은 높이에 있다. 표준화 탭: 유동성과 자산을 각자 평소 변동 크기로 나눈 점수(z)라 같은 눈금에서 방향을 비교한다. 사이클 탭: 로그 유동성(주간)에서 장기 추세를 빼고 2~6년 주기만 남긴 선이다. 앞뒤 양방향 필터라 최근 몇 달의 값과 위상 판정은 새 자료가 들어오면 바뀔 수 있고, 미래를 예측하는 선이 아니다. 주된 주기는 {YEARS:.0f}년 자료의 스펙트럼 추정이라 거칠다. 범례를 누르면 선을 켜고 끈다.", f"3M/6M/12M tabs: the shaded area is the log change in global liquidity (left axis, %); lines are the log change of each asset over the same period (right axis, %). When you change the period (2Y, 5Y, All) or zoom, the vertical scales refit to that window and the left and right zero lines always stay level. Z-score tab: liquidity and assets are each scaled by their own typical variability, so their direction can be compared on one scale. Cycle tab: weekly log liquidity with the long-run trend removed, keeping only 2-6 year cycles. The filter runs forward and backward, so recent values and the phase reading can change as new data arrive; it is not a forecast. The dominant period is a rough spectral estimate from {YEARS:.0f} years of data. Click a legend item to show or hide a line.")}</div>
 <h2>{T('자산 변화율 (현재)', 'Asset changes (current)')}</h2>
 <table><tr><th>{T('자산', 'Asset')}</th>{''.join(f'<th>{T(h, H_EN[h])}</th>' for h in HORIZONS)}</tr>{assets_now}</table>
@@ -411,7 +454,8 @@ def write_raw_xlsx(path):
         '출처: FRED(세인트루이스 연준), 야후 파이낸스. 개인 연구용 비상업 자료이며 투자 권유가 아니다.']})
     with pd.ExcelWriter(path, engine='openpyxl') as w:
         summ.to_excel(w, sheet_name='요약', index=False); liq.to_excel(w, sheet_name='유동성_일별'); ast.to_excel(w, sheet_name='자산_일별')
-        cyc.to_excel(w, sheet_name='사이클_주간'); raw.to_excel(w, sheet_name='FRED_원자료', index=False); note.to_excel(w, sheet_name='설명', index=False)
+        _wk = pd.concat([WGL.rename('글로벌 유동성(조 달러)'), WTOT.rename('주간 변화(10억 달러)'), WPCT.rename('주간 변화율(%)'), WCH.add_suffix(' 기여(10억 달러)')], axis=1); _wk.index.name = '주(마지막 자료일)'
+        _wk.to_excel(w, sheet_name='유동성_주간'); cyc.to_excel(w, sheet_name='사이클_주간'); raw.to_excel(w, sheet_name='FRED_원자료', index=False); note.to_excel(w, sheet_name='설명', index=False)
         for ws in w.book.worksheets:
             ws.freeze_panes = 'B2'
             for col in ws.columns:
